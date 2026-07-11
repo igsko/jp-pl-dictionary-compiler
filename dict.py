@@ -12,19 +12,7 @@ def extract_raw_text(pdf_path, exclude_attribution_page=True):
     
     # extract text from every page
     for page in doc:
-        # get the physical dimensions of the active PDF page
-        rect = page.rect
-        width = rect.width
-
-        # extract text blocks
-        blocks = page.get_text("blocks")
-        
-        # sort blocks: left column first (b[0] < width/2), then top-to-bottom (b[1])
-        blocks.sort(key=lambda b: (0 if b[0] < width / 2 else 1, b[1]))
-
-        # join the sorted blocks with newlines
-        page_text = "\n".join([b[4] for b in blocks])
-        all_pages.append(page_text)
+        all_pages.append(page.get_text("text"))
     
     # find the start of chapter 3
     start_page_idx = 0
@@ -52,7 +40,7 @@ def clean_dictionary_text(text):
     text = re.sub(r'Słownik\s+Japońsko-Polski', '', text)
 
     # strip running column headers like "17. AR"
-    text = re.sub(r'^\s*\d{1,4}\.?\s+[A-ZŚĆŹŻŁÓA-Za-z]{1,4}\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d{1,4}\.?\s+[A-ZŚĆŹŻŁÓ]{1,4}\s*$', '', text, flags=re.MULTILINE)
     
     # remove standalone page numbers e.g., "1055" on its own line
     text = re.sub(r'^\s*\d{1,4}\s*$', '', text, flags=re.MULTILINE)
@@ -117,6 +105,8 @@ def parse_entry(entry_text):
         if index_match:
             index_str = index_match.group(1)
             remaining_text = index_match.group(2).strip()
+            if remaining_text.startswith('.'):
+                remaining_text = remaining_text[1:].strip()
             lines[0] = remaining_text
         else:
             index_str = "1"
@@ -165,9 +155,7 @@ def parse_entry(entry_text):
             if line.startswith('·') or line.startswith('.'):
                 # clean the bullet points
                 cleaned_meta = re.sub(r'^[·\.]\s*', '', line).strip()
-                # filter out page number + column header leaks (eg. "17. AR" or "17 AR")
-                if re.match(r'^\d+\.?\s*[A-ZŚĆŹŻŁÓA-Za-z]+$', cleaned_meta):
-                    continue
+
                 # length guard:
                 # if the tag is too long, treat it as part of the translation text
                 if len(cleaned_meta) <= 30:
