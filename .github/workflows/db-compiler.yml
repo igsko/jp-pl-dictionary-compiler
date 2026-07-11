@@ -1,0 +1,52 @@
+name: Generate and Release Dictionary DB
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # runs weekly on sundays at midnight
+  workflow_dispatch: # allows manual triggering
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install pymupdf
+
+      - name: Check and Download latest PDF
+        id: check_db
+        run: |
+          python check_version.py
+
+      # this and subsequent steps only run if check_version.py sets new_version=true
+      - name: Parse PDF into JSON
+        if: steps.check_db.outputs.new_version == 'true'
+        run: |
+          python dict.py
+
+      - name: Compile SQLite Database
+        if: steps.check_db.outputs.new_version == 'true'
+        run: |
+          python parsed_dict_to_sqldb.py ${{ steps.check_db.outputs.scraped_version }}
+
+      - name: Create GitHub Release & Upload Asset
+        if: steps.check_db.outputs.new_version == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.check_db.outputs.scraped_version }}
+          name: baza słownika v${{ steps.check_db.outputs.scraped_version }}
+          body: "Automatycznie wygenerowana baza danych z wersji strony: ${{ steps.check_db.outputs.scraped_version }}."
+          files: |
+            dictionary.db
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
