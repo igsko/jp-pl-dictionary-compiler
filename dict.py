@@ -40,7 +40,7 @@ def clean_dictionary_text(text):
     text = re.sub(r'Słownik\s+Japońsko-Polski', '', text)
 
     # strip running column headers like "17. AR"
-    text = re.sub(r'^\s*\d{1,4}\.?\s+[A-ZŚĆŹŻŁÓ]{1,4}\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*(?:\d+\.)?\d+\.?\s+[A-ZŚĆŹŻŁÓ]{1,4}\s*$', '', text, flags=re.MULTILINE)
     
     # remove standalone page numbers e.g., "1055" on its own line
     text = re.sub(r'^\s*\d{1,4}\s*$', '', text, flags=re.MULTILINE)
@@ -155,13 +155,7 @@ def parse_entry(entry_text):
             if line.startswith('·') or line.startswith('.'):
                 # clean the bullet points
                 cleaned_meta = re.sub(r'^[·\.]\s*', '', line).strip()
-
-                # length guard:
-                # if the tag is too long, treat it as part of the translation text
-                if len(cleaned_meta) <= 30:
-                    meaning_obj["metadata"].append(cleaned_meta)
-                else:
-                    add_translation(cleaned_meta)
+                meaning_obj["metadata"].append(cleaned_meta)
             else:
                 add_translation(line)
 
