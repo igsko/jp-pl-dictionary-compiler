@@ -124,11 +124,17 @@ def parse_entry(entry_text):
                 meaning_obj["translations"].append(text_to_add)
             else:
                 last = meaning_obj["translations"][-1]
+
+                # check if we are merging short terms or long descriptive sentences
+                is_sentence = len(last) > 25 or len(text_to_add) > 25 or last[-1] in ['.',';','!','?']
+                join_char = " " if is_sentence else ", " 
+
                 # if the line starts with lowercase, or the previous line does not end with terminal punctuation
                 # merge them into a single paragraph instead of splitting them with commas
                 if text_to_add[0].islower() or (last and last[-1] not in ['.', '!', '?']):
-                    merged = last.rstrip() + " " + text_to_add
+                    merged = last.rstrip() + join_char + text_to_add
                     merged = re.sub(r'\s+', ' ', merged)
+                    merged = re.sub(r',\s*,', ',', merged)
                     meaning_obj["translations"][-1] = merged
                 else:
                     meaning_obj["translations"].append(text_to_add)
@@ -136,8 +142,11 @@ def parse_entry(entry_text):
         # parse lines into translations or bullet point attributes
         for line in lines:
             line = line.strip()
-            if not line:
+
+            # skip empty lines or orphaned bullets
+            if not line or line in ['-', '·', '.']:
                 continue
+            
             if line.startswith('·') or line.startswith('.'):
                 # clean the bullet points
                 cleaned_meta = re.sub(r'^[·\.]\s*', '', line).strip()
