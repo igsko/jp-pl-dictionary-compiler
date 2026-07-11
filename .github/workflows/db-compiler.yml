@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: '0 0 * * 0' # runs weekly on sundays at midnight
   workflow_dispatch: # allows manual triggering
+    inputs:
+      force_build:
+        description: 'Force database generation even if the website timestamp hasn\'t changed'
+        required: false
+        default: 'false'
+        type: boolean
+      custom_version:
+        description: 'Optional custom version tag override'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   check-and-build:
@@ -26,7 +37,7 @@ jobs:
       - name: Check and Download latest PDF
         id: check_db
         run: |
-          python check_version.py
+          python check_version.py --force "${{github.event.inputs.force_build || 'false'}}" --custom-version "${{github.event.inputs.custom_version || ''}}"
 
       # this and subsequent steps only run if check_version.py sets new_version=true
       - name: Parse PDF into JSON

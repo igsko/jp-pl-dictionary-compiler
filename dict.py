@@ -35,12 +35,17 @@ def extract_raw_text(pdf_path, exclude_attribution_page=True):
 
 def clean_dictionary_text(text):
     """Removes headers, footers, and page-break artifacts."""
-    # remove page headers e.g., "3.1. A ROZDZIAŁ 3. SPIS SŁÓW"
-    header_pattern = r'\d+\.\d+\.\s+[A-ZŚĆŹŻŁÓa-z]\s+ROZDZIAŁ\s+\d+\.\s+SPIS\s+SŁÓW'
-    text = re.sub(header_pattern, '', text)
+    # remove page headers on all pages e.g., "3.1. A ROZDZIAŁ 3. SPIS SŁÓW"
+    text = re.sub(r'(?:\d+\.\d+\.\s+[A-ZŚĆŹŻŁÓa-z]\s+)?ROZDZIAŁ\s+\d+\.\s+SPIS\s+SŁÓW', '', text)
+    text = re.sub(r'Słownik\s+Japońsko-Polski', '', text)
     
     # remove standalone page numbers e.g., "1055" on its own line
     text = re.sub(r'^\s*\d{1,4}\s*$', '', text, flags=re.MULTILINE)
+
+    # clean up line-break hyphenation e.g., "prze-\nstrzeni" -> "przestrzeni"
+    text = re.sub(r'(\w+)-\n\s*(\w+)', r'\1\2', text)
+    # handle trailing comma hyphenations "na-,\nzywania" -> "nazywania,"
+    text = re.sub(r'(\w+)-\s*,\s*\n\s*(\w+)', r'\1\2,', text)
     
     # normalize multiple newlines to clean up spacing
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -113,6 +118,21 @@ def parse_entry(entry_text):
             "metadata": []
         }
 
+        # helper for stitching sentence continuations together
+        def add_translation(text_to_add):
+            if not meaning_obj["translations"]:
+                meaning_obj["translations"].append(text_to_add)
+            else:
+                last = meaning_obj["translations"][-1]
+                # if the line starts with lowercase, or the previous line does not end with terminal punctuation
+                # merge them into a single paragraph instead of splitting them with commas
+                if text_to_add[0].islower() or (last and last[-1] not in ['.', '!', '?']):
+                    merged = last.rstrip() + " " + text_to_add
+                    merged = re.sub(r'\s+', ' ', merged)
+                    meaning_obj["translations"][-1] = merged
+                else:
+                    meaning_obj["translations"].append(text_to_add)
+
         # parse lines into translations or bullet point attributes
         for line in lines:
             line = line.strip()
@@ -121,9 +141,14 @@ def parse_entry(entry_text):
             if line.startswith('·') or line.startswith('.'):
                 # clean the bullet points
                 cleaned_meta = re.sub(r'^[·\.]\s*', '', line).strip()
-                meaning_obj["metadata"].append(cleaned_meta)
+                # length guard:
+                # if the tag is too long, treat it as part of the translation text
+                if len(cleaned_meta) <= 30:
+                    meaning_obj["metadata"].append(cleaned_meta)
+                else:
+                    add_translation(cleaned_meta)
             else:
-                meaning_obj["translations"].append(line)
+                add_translation(line)
 
         parsed_entry["meanings"].append(meaning_obj)
 

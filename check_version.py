@@ -3,32 +3,37 @@ import re
 import urllib.request
 import json
 import ssl
+import argparse
 
 def check():
     ssl_context = ssl._create_unverified_context()
+
+    parser = argparse.ArgumentParser(description="Check dictionary version and download PDF")
+    parser.add_argument("--force", type=str, default="false", help="Force rebuild ('true' || 'false')")
+    parser.add_argument("--custom-version", type=str, default="", help="Optional custom version override")
+    args = parser.parse_args()
     
     # scrape the website for the latest version string
     url = "https://www.japonski-pomocnik.pl/wordDictionary"
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    scraped_version = ""
     try:
         with urllib.request.urlopen(req, context=ssl_context) as response:
             html = response.read().decode('utf-8')
             # find 'wersja', then up to 100 characters, then 8 digits
             match = re.search(r'Wersja.{0,100}?(\d{8})', html, re.IGNORECASE | re.DOTALL)
-            if not match:
-                print("Could not find version string on website.")
-                # print diagnostic information
-                print("\n--- DIAGNOSTIC INFO ---")
-                print(f"response status: {response.status}")
-                print(f"headers: {response.headers}")
-                print("HTML snippet, first 1000 chars:")
-                print(html[:1000])
-                print("-----------------------\n")
-                return
-            scraped_version = match.group(1)
-            print(f"Latest website version: {scraped_version}")
+            if match:
+                scraped_version = match.group(1)
+                print(f"Latest website version: {scraped_version}")
     except Exception as e:
         print(f"Error scraping website: {e}")
+
+    # if a custom version tag is supplied, override the scraped version
+    if args.custom_version.strip():
+        scraped_version = args.custom_version.strip()
+        print(f"Applying custom version tag override: {scraped_version}")
+    elif not scraped_version:
+        print("Could not find version string on website and no custom version supplied")
         return
 
     # get the latest release tag from GitHub's API
