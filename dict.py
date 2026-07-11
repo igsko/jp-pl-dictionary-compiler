@@ -50,6 +50,9 @@ def clean_dictionary_text(text):
     # remove page headers on all pages e.g., "3.1. A ROZDZIAŁ 3. SPIS SŁÓW"
     text = re.sub(r'(?:\d+\.\d+\.\s+[A-ZŚĆŹŻŁÓa-z]\s+)?ROZDZIAŁ\s+\d+\.\s+SPIS\s+SŁÓW', '', text)
     text = re.sub(r'Słownik\s+Japońsko-Polski', '', text)
+
+    # strip running column headers like "17. AR"
+    text = re.sub(r'^\s*\d{1,4}\.?\s+[A-ZŚĆŹŻŁÓA-Za-z]{1,4}\s*$', '', text, flags=re.MULTILINE)
     
     # remove standalone page numbers e.g., "1055" on its own line
     text = re.sub(r'^\s*\d{1,4}\s*$', '', text, flags=re.MULTILINE)
