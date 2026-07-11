@@ -6,7 +6,7 @@ on:
   workflow_dispatch: # allows manual triggering
     inputs:
       force_build:
-        description: 'Force database generation even if the website timestamp hasn\'t changed'
+        description: 'Force database generation even if the website timestamp hasnt changed'
         required: false
         default: 'false'
         type: boolean
