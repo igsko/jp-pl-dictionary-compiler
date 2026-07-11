@@ -13,10 +13,17 @@ def check():
     try:
         with urllib.request.urlopen(req, context=ssl_context) as response:
             html = response.read().decode('utf-8')
-            # look for date pattern, e.g. "Wersja aplikacji: 20260702"
+            # find 'wersja', skip any non-digit chars like colons, spaces, tags, capture 8 digits
             match = re.search(r'Wersja aplikacji:\s*(\d{8})', html)
             if not match:
                 print("Could not find version string on website.")
+                # print diagnostic information
+                print("\n--- DIAGNOSTIC INFO ---")
+                print(f"response status: {response.status}")
+                print(f"headers: {response.headers}")
+                print("HTML snippet, first 1000 chars:")
+                print(html[:1000])
+                print("-----------------------\n")
                 return
             scraped_version = match.group(1)
             print(f"Latest website version: {scraped_version}")
