@@ -15,18 +15,15 @@ def extract_raw_text(pdf_path, exclude_attribution_page=True):
         # get the physical dimensions of the active PDF page
         rect = page.rect
         width = rect.width
-        height = rect.height
 
-        # divide the page rect vertically down the exact middle
-        rect_left = fitz.Rect(0, 0, width / 2, height)
-        rect_right = fitz.Rect(width / 2, 0, width, height)
+        # extract text blocks
+        blocks = page.get_text("blocks")
+        
+        # sort blocks: left column first (b[0] < width/2), then top-to-bottom (b[1])
+        blocks.sort(key=lambda b: (0 if b[0] < width / 2 else 1, b[1]))
 
-        # extract text from the left column first, then the right column
-        text_left = page.get_text("text", clip=rect_left)
-        text_right = page.get_text("text", clip=rect_right)
-
-        # merge them sequentially so column 1 ends before column 2 starts
-        page_text = text_left + "\n" + text_right
+        # join the sorted blocks with newlines
+        page_text = "\n".join([b[4] for b in blocks])
         all_pages.append(page_text)
     
     # find the start of chapter 3
