@@ -12,7 +12,22 @@ def extract_raw_text(pdf_path, exclude_attribution_page=True):
     
     # extract text from every page
     for page in doc:
-        all_pages.append(page.get_text("text"))
+        # get the physical dimensions of the active PDF page
+        rect = page.rect
+        width = rect.width
+        height = rect.height
+
+        # divide the page rect vertically down the exact middle
+        rect_left = fitz.Rect(0, 0, width / 2, height)
+        rect_right = fitz.Rect(width / 2, 0, width, height)
+
+        # extract text from the left column first, then the right column
+        text_left = page.get_text("text", clip=rect_left)
+        text_right = page.get_text("text", clip=rect_right)
+
+        # merge them sequentially so column 1 ends before column 2 starts
+        page_text = text_left + "\n" + text_right
+        all_pages.append(page_text)
     
     # find the start of chapter 3
     start_page_idx = 0
@@ -146,7 +161,7 @@ def parse_entry(entry_text):
             # skip empty lines or orphaned bullets
             if not line or line in ['-', '·', '.']:
                 continue
-            
+
             if line.startswith('·') or line.startswith('.'):
                 # clean the bullet points
                 cleaned_meta = re.sub(r'^[·\.]\s*', '', line).strip()
