@@ -43,7 +43,7 @@ def clean_dictionary_text(text):
     text = re.sub(r'^\s*(?:\d+\.)?\d+\.?\s+[A-ZŚĆŹŻŁÓ]{1,4}\s*$', '', text, flags=re.MULTILINE)
     
     # remove standalone page numbers e.g., "1055" on its own line
-    text = re.sub(r'^\s*\d{1,4}\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d{1,6}\s*$', '', text, flags=re.MULTILINE)
 
     # clean up line-break hyphenation e.g., "prze-\nstrzeni" -> "przestrzeni"
     text = re.sub(r'(\w+)-\n\s*(\w+)', r'\1\2', text)
