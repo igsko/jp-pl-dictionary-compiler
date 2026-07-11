@@ -141,6 +141,9 @@ def parse_entry(entry_text):
             if line.startswith('·') or line.startswith('.'):
                 # clean the bullet points
                 cleaned_meta = re.sub(r'^[·\.]\s*', '', line).strip()
+                # filter out page number + column header leaks (eg. "17. AR" or "17 AR")
+                if re.match(r'^\d+\.?\s*[A-ZŚĆŹŻŁÓA-Za-z]+$', cleaned_meta):
+                    continue
                 # length guard:
                 # if the tag is too long, treat it as part of the translation text
                 if len(cleaned_meta) <= 30:
