@@ -25,8 +25,8 @@ def check():
         return
 
     # get the latest release tag from GitHub's API
-    # default to "igsko/dictionary" if GITHUB_REPOSITORY environment is not set
-    repo = os.environ.get("GITHUB_REPOSITORY", "igsko/dictionary")
+    # default to "igsko/jp-pl-dictionary-compiler" if GITHUB_REPOSITORY environment is not set
+    repo = os.environ.get("GITHUB_REPOSITORY", "igsko/jp-pl-dictionary-compiler")
     github_url = f"https://api.github.com/repos/{repo}/releases/latest"
     gh_req = urllib.request.Request(github_url, headers={'User-Agent': 'Mozilla/5.0'})
     
