@@ -13,8 +13,8 @@ def check():
     try:
         with urllib.request.urlopen(req, context=ssl_context) as response:
             html = response.read().decode('utf-8')
-            # find 'wersja', skip any non-digit chars like colons, spaces, tags, capture 8 digits
-            match = re.search(r'Wersja aplikacji:\s*(\d{8})', html)
+            # find 'wersja', then up to 100 characters, then 8 digits
+            match = re.search(r'Wersja.{0,100}?(\d{8})', html, re.IGNORECASE | re.DOTALL)
             if not match:
                 print("Could not find version string on website.")
                 # print diagnostic information
