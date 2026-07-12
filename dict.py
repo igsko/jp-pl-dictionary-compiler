@@ -131,7 +131,7 @@ def parse_entry(entry_text):
                 last = meaning_obj["translations"][-1]
 
                 # check if we are merging short terms or long descriptive sentences
-                is_sentence = len(last) > 25 or len(text_to_add) > 25 or last[-1] in ['.',';','!','?']
+                is_sentence = len(text_to_add) > 25 or text_to_add[0].isupper() or last[-1] in ['.',';','!','?']
                 join_char = " " if is_sentence else ", " 
 
                 # if the line starts with lowercase, or the previous line does not end with terminal punctuation
