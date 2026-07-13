@@ -2,6 +2,37 @@ import sqlite3
 import json
 import urllib.request
 import ssl
+import hashlib
+import re
+
+def get_stable_id(kanji, kana, romaji, translation_preview):
+    """
+    Generates a highly stable, collision-free, deterministic 63-bit 
+    positive integer ID based on the entry's Japanese headings
+    and a first word of the Polish translation as a semantic identifier
+
+    Protects ID against changes to the word order in the PDF e.g. 
+    adding/removing homographs
+    and against typos/modifications further down in the definition
+    """
+    first_word = "unknown"
+    if translation_preview:
+        # split the translation at spaces and commas and take the first term
+        tokens = re.split(r'[\s,\/]+', translation_preview.strip().lower())
+        if tokens and tokens[0]:
+            first_word = tokens[0]
+
+    # combine the unique characteristics of the entry
+    key = f"{kanji or ''}#{kana}#{romaji}#{first_word}"
+    
+    # generate a SHA-256 hash
+    h = hashlib.sha256(key.encode('utf-8')).digest()
+    
+    # convert the first 8 bytes of the hash into an unsigned 64-bit integer
+    unsigned_val = int.from_bytes(h[:8], byteorder='big')
+    
+    # constrain to a positive 63-bit signed integer to prevent SQLite overflow
+    return unsigned_val & 0x7FFFFFFFFFFFFFFF
 
 def to_hiragana(text):
     """Converts Katakana characters to Hiragana for uniform alignment matching."""
@@ -86,7 +117,7 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY,
             kanji TEXT,
             kana TEXT,
             romaji TEXT,
@@ -124,7 +155,13 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
             kanji, kana = None, parts[0]
             
         norm_kana = to_hiragana(kana)
-        
+
+        # create a unique key based on the headword components
+        hw_key = f"{kanji or ''}#{kana}#{primary_rom}"
+
+        # generate a stable id
+        stable_id = get_stable_id(kanji, kana, primary_rom, translation_preview)
+
         # determine frequency rank (
         # only lookup kanji, fallback to kana if kana-only
         if kanji:
@@ -148,12 +185,12 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
         for m in entry["meanings"]:
             translations.extend(m["translations"])
         translation_preview = ", ".join(translations[:3])
-        
+
+        # insert the entry with the stable id
         cursor.execute(
-            "INSERT INTO entries (kanji, kana, romaji, translation, frequency_rank, pitch_accent, full_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (kanji, kana, primary_rom, translation_preview, rank, pitch_accent, json.dumps(entry, ensure_ascii=False))
+            "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (stable_id, kanji, kana, primary_rom, translation_preview, rank, pitch_accent, json.dumps(entry, ensure_ascii=False))
         )
-        entry_id = cursor.lastrowid
         
         keys = set()
         if kanji: keys.add(kanji.lower().strip())
@@ -164,7 +201,7 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
             
         for key in keys:
             if key:
-                cursor.execute("INSERT INTO search_index (key, entry_id) VALUES (?, ?)", (key, entry_id))
+                cursor.execute("INSERT INTO search_index (key, entry_id) VALUES (?, ?)", (key, stable_id))
                 
     conn.commit()
     cursor.execute("VACUUM")
