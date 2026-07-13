@@ -19,8 +19,8 @@ def get_stable_id(kanji, kana, romaji, occurrence=0):
     # convert the first 8 bytes of the hash into an unsigned 64-bit integer
     unsigned_val = int.from_bytes(h[:8], byteorder='big')
     
-    # constrain to a positive 63-bit signed integer to prevent SQLite overflow
-    return unsigned_val & 0x7FFFFFFFFFFFFFFF
+    # constrain to a positive 53-bit signed integer to prevent JS precision loss
+    return unsigned_val & 0x1FFFFFFFFFFFFFFF
 
 def to_hiragana(text):
     """Converts Katakana characters to Hiragana for uniform alignment matching."""
