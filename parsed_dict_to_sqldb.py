@@ -156,8 +156,10 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
             
         norm_kana = to_hiragana(kana)
 
-        # create a unique key based on the headword components
-        hw_key = f"{kanji or ''}#{kana}#{primary_rom}"
+        translations = []
+        for m in entry["meanings"]:
+            translations.extend(m["translations"])
+        translation_preview = ", ".join(translations[:3])
 
         # generate a stable id
         stable_id = get_stable_id(kanji, kana, primary_rom, translation_preview)
@@ -180,11 +182,6 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
         else:
             # kana-only words e.g., "シャーシ"
             pitch_accent = pitch_data.get((norm_kana, norm_kana))
-        
-        translations = []
-        for m in entry["meanings"]:
-            translations.extend(m["translations"])
-        translation_preview = ", ".join(translations[:3])
 
         # insert the entry with the stable id
         cursor.execute(
