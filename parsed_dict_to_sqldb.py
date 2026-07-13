@@ -20,7 +20,7 @@ def get_stable_id(kanji, kana, romaji, occurrence=0):
     unsigned_val = int.from_bytes(h[:8], byteorder='big')
     
     # constrain to a positive 53-bit signed integer to prevent JS precision loss
-    return unsigned_val & 0x1FFFFFFFFFFFFFFF
+    return unsigned_val & 0x1FFFFFFFFFFFFF
 
 def to_hiragana(text):
     """Converts Katakana characters to Hiragana for uniform alignment matching."""
