@@ -3,27 +3,15 @@ import json
 import urllib.request
 import ssl
 import hashlib
-import re
 
-def get_stable_id(kanji, kana, romaji, translation_preview):
+def get_stable_id(kanji, kana, romaji, occurrence=0):
     """
     Generates a highly stable, collision-free, deterministic 63-bit 
-    positive integer ID based on the entry's Japanese headings
-    and a first word of the Polish translation as a semantic identifier
-
-    Protects ID against changes to the word order in the PDF e.g. 
-    adding/removing homographs
-    and against typos/modifications further down in the definition
+    positive integer ID based on the entry's headwords and a sequential
+    occurence counter for homographs.
     """
-    first_word = "unknown"
-    if translation_preview:
-        # split the translation at spaces and commas and take the first term
-        tokens = re.split(r'[\s,\/]+', translation_preview.strip().lower())
-        if tokens and tokens[0]:
-            first_word = tokens[0]
-
     # combine the unique characteristics of the entry
-    key = f"{kanji or ''}#{kana}#{romaji}#{first_word}"
+    key = f"{kanji or ''}#{kana}#{romaji}#{occurrence}"
     
     # generate a SHA-256 hash
     h = hashlib.sha256(key.encode('utf-8')).digest()
@@ -142,6 +130,9 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
     
     with open(source_json, 'r', encoding='utf-8') as f:
         dictionary = json.load(f)
+
+    # keeps track of sequential homograph counts during db compilation
+    seen_counts = {}
         
     print("Populating database...")
     for entry in dictionary:
@@ -156,13 +147,20 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
             
         norm_kana = to_hiragana(kana)
 
+        # create a unique key based on the headword components
+        hw_key = f"{kanji or ''}#{kana}#{primary_rom}"
+
+        # retrieve the current occurrence count and increment it
+        occurrence = seen_counts.get(hw_key, 0)
+        seen_counts[hw_key] = occurrence + 1
+
         translations = []
         for m in entry["meanings"]:
             translations.extend(m["translations"])
         translation_preview = ", ".join(translations[:3])
 
         # generate a stable id
-        stable_id = get_stable_id(kanji, kana, primary_rom, translation_preview)
+        stable_id = get_stable_id(kanji, kana, primary_rom, occurrence)
 
         # determine frequency rank (
         # only lookup kanji, fallback to kana if kana-only
