@@ -51,6 +51,7 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
         req = urllib.request.Request(freq_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, context=ssl_context) as response:
             raw_lines = response.read().decode('utf-8').splitlines()
+            # map each Japanese word to its frequency rank
             for rank, word in enumerate(raw_lines, 1):
                 word_clean = word.strip()
                 if word_clean and word_clean not in freq_data:
@@ -72,11 +73,13 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
                 if not line or line.startswith('#'):
                     continue
                 parts = line.split(';')
+                # Ensure the line has enough columns and only process entries originating from the 'nhk' source
                 if len(parts) >= 3 and parts[0] == 'nhk':
-                    writing = parts[1].strip()
-                    reading_with_arrows = parts[2].strip()
-                    clean_reading = clean_pitch_reading(reading_with_arrows)
+                    writing = parts[1].strip() # extract the writing kanji/kana
+                    reading_with_arrows = parts[2].strip() # extract the reading - NHK pitch arrows
+                    clean_reading = clean_pitch_reading(reading_with_arrows) #remove non-phonetic pitch/accent symbols
                     
+                    # normalize katakana to hiragana in both writing and reading
                     norm_writing = to_hiragana(writing)
                     norm_reading = to_hiragana(clean_reading)
                     
@@ -126,7 +129,7 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
     
     # insert the database version into the metadata table
     cursor.execute("INSERT INTO metadata (key, value) VALUES ('version', ?)", (version_string,))
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_key ON search_index(key)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_composite ON search_index(key, entry_id)")
     
     with open(source_json, 'r', encoding='utf-8') as f:
         dictionary = json.load(f)
