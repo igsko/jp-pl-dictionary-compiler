@@ -50,6 +50,11 @@ jobs:
         run: |
           python parsed_dict_to_sqldb.py ${{ steps.check_db.outputs.scraped_version }}
 
+      - name: Validate Compiled Database
+        if: steps.check_db.outputs.new_version == 'true'
+        run: |
+          python validate_db.py
+
       - name: Create GitHub Release & Upload Asset
         if: steps.check_db.outputs.new_version == 'true'
         uses: softprops/action-gh-release@v2

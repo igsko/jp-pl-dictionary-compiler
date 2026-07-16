@@ -5,14 +5,22 @@ import json
 def extract_raw_text(pdf_path, exclude_attribution_page=True):
     """
     Extracts text from the PDF, dynamically finding the start of Chapter 3 
-    and omitting the last page.
+    and omitting the last page, and stripping headers and footers using 
+    coordinate-based clipping.
     """
     doc = fitz.open(pdf_path)
     all_pages = []
     
-    # extract text from every page
+    # extract text from every page, cutting of top/bottom margins
     for page in doc:
-        all_pages.append(page.get_text("text"))
+        rect = page.rect # grabs page dimensions
+
+        # define clipping box which ignores margins:
+        # -cuts off top 45pts
+        # -cuts off btm 45pts
+        clip_rect = fitz.Rect(0, 40, rect.width, rect.height - 30) 
+        page_text = page.get_text("text", clip=clip_rect) # grab text data exclusively from the clip box
+        all_pages.append(page_text)
     
     # find the start of chapter 3
     start_page_idx = 0

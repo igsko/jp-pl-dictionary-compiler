@@ -12,6 +12,7 @@ ENV/
 *.pdf
 *.json
 *.db
+*.xml
 
 # OS specific files
 .DS_Store
