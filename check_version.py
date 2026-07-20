@@ -51,11 +51,22 @@ def check():
     except Exception as e:
         print(f"No previous release found on GitHub or error fetching: {e}")
 
-    # compare and set outputs
-    expected_tag = f"v{scraped_version}"
+    # extract just the 8digit date from latest github release tag e.g. "v20260702l" -> "20260702"
+    latest_version_base = ""
+    if latest_tag:
+        match_date = re.search(r'\d{8}', latest_tag)
+        if match_date:
+            latest_version_base = match_date.group(0)
+            print(f"Parsed base version from GitHub: {latest_version_base}")
+
     new_version = "false"
-    
-    if latest_tag != expected_tag:
+
+    # Trigger the database compilation pipeline only if the scraped website version
+    # is strictly newer than the base date of the latest GitHub release.
+    # Using a '>' comparison prevents automated cron builds from 
+    # executing a downgrade release (e.g., publishing '20260702') when a manual 
+    # hotfix build with an alphabetical suffix (e.g., 'v20260702l') is already active.
+    if scraped_version and (not latest_version_base or scraped_version > latest_version_base):
         print("New version detected! Preparing database pipeline...")
         new_version = "true"
         
@@ -68,7 +79,7 @@ def check():
                 f.write(pdf_resp.read())
         print("PDF downloaded successfully!")
     else:
-        print("Database is already up-to-date. Skipping compilation.")
+        print("Database is already up-to-date or GitHub has a newer manual build. Skipping compilation.")
 
     # write output variables for the gitHub actions workflow runner
     if "GITHUB_OUTPUT" in os.environ:
