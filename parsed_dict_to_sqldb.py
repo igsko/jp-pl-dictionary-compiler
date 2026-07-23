@@ -3,6 +3,7 @@ import json
 import urllib.request
 import ssl
 import hashlib
+import re
 
 def get_stable_id(kanji, kana, romaji, occurrence=0):
     """
@@ -38,6 +39,111 @@ def to_hiragana(text):
 def clean_pitch_reading(text):
     """Strips NHK pitch arrow symbols to isolate the clean Hiragana reading."""
     return text.replace('ꜛ', '').replace('ꜜ', '').replace('*', '').replace('~', '').strip()
+
+def load_jlpt_data():
+    """
+    Downloads JLPT vocabulary datasets (N5 to N1) and returns a lookup dictionary.
+    Keys can be (kanji_or_kana, norm_reading) tuples or plain kanji/kana strings.
+    Values are integer JLPT levels (5=N5, 4=N4, 3=N3, 2=N2, 1=N1).
+    """
+    ssl_context = ssl._create_unverified_context()
+    print("Downloading JLPT vocabulary datasets...")
+    jlpt_data = {}
+
+    sources = [
+        ("open-anki-jlpt-decks", "https://raw.githubusercontent.com/jamsinclair/open-anki-jlpt-decks/main/src/n{level}.csv"),
+        ("jlpt-word-list", "https://raw.githubusercontent.com/elzup/jlpt-word-list/master/src/n{level}.csv")
+    ]
+
+    for source_name, url_template in sources:
+        success = True
+        temp_data = {}
+        for level in [5, 4, 3, 2, 1]:
+            url = url_template.format(level=level)
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, context=ssl_context) as response:
+                    raw_text = response.read().decode('utf-8')
+                    lines = raw_text.splitlines()
+                    if not lines:
+                        continue
+
+                    header = [h.strip().lower() for h in lines[0].split(',')]
+                    expr_idx = 0
+                    read_idx = 1
+
+                    if 'expression' in header:
+                        expr_idx = header.index('expression')
+                    elif 'word' in header:
+                        expr_idx = header.index('word')
+                    elif 'kanji' in header:
+                        expr_idx = header.index('kanji')
+
+                    if 'reading' in header:
+                        read_idx = header.index('reading')
+                    elif 'kana' in header:
+                        read_idx = header.index('kana')
+
+                    start_row = 1 if ('expression' in header or 'word' in header or 'kanji' in header) else 0
+
+                    for line in lines[start_row:]:
+                        parts = [p.strip() for p in line.split(',')]
+                        if len(parts) <= max(expr_idx, read_idx):
+                            continue
+
+                        expression = parts[expr_idx]
+                        reading = parts[read_idx]
+
+                        if not expression:
+                            continue
+
+                        clean_expr = re.sub(r'[\(\（].*?[\)\）]', '', expression).strip()
+                        clean_read = re.sub(r'[\(\（].*?[\)\）]', '', reading).strip() if reading else ""
+
+                        norm_expr = to_hiragana(clean_expr)
+                        norm_read = to_hiragana(clean_read) if clean_read else norm_expr
+
+                        if (clean_expr, norm_read) not in temp_data:
+                            temp_data[(clean_expr, norm_read)] = level
+                        if (norm_expr, norm_read) not in temp_data:
+                            temp_data[(norm_expr, norm_read)] = level
+                        if clean_expr not in temp_data:
+                            temp_data[clean_expr] = level
+
+            except Exception as e:
+                print(f"Warning: Failed to fetch JLPT level N{level} from {source_name}: {e}")
+                success = False
+                break
+
+        if success and len(temp_data) > 0:
+            jlpt_data = temp_data
+            print(f"Loaded {len(jlpt_data)} JLPT vocabulary mappings from {source_name}!")
+            return jlpt_data
+
+    # backup source: Bluskyo/JLPT_Vocabulary JSON
+    try:
+        json_url = "https://raw.githubusercontent.com/Bluskyo/JLPT_Vocabulary/master/JLPT_vocab_ALL.json"
+        req = urllib.request.Request(json_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=ssl_context) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            for word, entries in data.items():
+                clean_word = re.sub(r'[\(\（].*?[\)\）]', '', word).strip()
+                norm_word = to_hiragana(clean_word)
+                for item in entries:
+                    reading = item.get("reading", "")
+                    clean_read = re.sub(r'[\(\（].*?[\)\）]', '', reading).strip()
+                    norm_read = to_hiragana(clean_read) if clean_read else norm_word
+                    lvl = item.get("level")
+                    if isinstance(lvl, int) and 1 <= lvl <= 5:
+                        jlpt_data[(clean_word, norm_read)] = lvl
+                        jlpt_data[(norm_word, norm_read)] = lvl
+                        if clean_word not in jlpt_data:
+                            jlpt_data[clean_word] = lvl
+        print(f"Loaded {len(jlpt_data)} JLPT vocabulary mappings from JSON backup source!")
+    except Exception as e:
+        print(f"Could not load JLPT dataset from any source: {e}. Defaulting to no JLPT tags.")
+
+    return jlpt_data
 
 # modify the build function signature to accept the version string
 def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
@@ -90,6 +196,9 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
         print(f"Loaded {len(pitch_data)} pitch accent mappings successfully!")
     except Exception as e:
         print(f"Could not load pitch accent dataset: {e}. Defaulting to no pitch.")
+
+    # download JLPT level dataset
+    jlpt_data = load_jlpt_data()
     
     # add the metadata table structure
     conn = sqlite3.connect(db_path)
@@ -115,6 +224,7 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
             translation TEXT,
             frequency_rank INTEGER,
             pitch_accent TEXT,
+            jlpt INTEGER,
             full_json TEXT
         )
     """)
@@ -184,10 +294,28 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
             # kana-only words e.g., "シャーシ"
             pitch_accent = pitch_data.get((norm_kana, norm_kana))
 
+        # determine jlpt level
+        jlpt_level = None
+        if kanji:
+            jlpt_level = jlpt_data.get((kanji, norm_kana))
+            if jlpt_level is None:
+                jlpt_level = jlpt_data.get((to_hiragana(kanji), norm_kana))
+            if jlpt_level is None:
+                jlpt_level = jlpt_data.get(kanji)
+        else:
+            jlpt_level = jlpt_data.get((kana, norm_kana))
+            if jlpt_level is None:
+                jlpt_level = jlpt_data.get((norm_kana, norm_kana))
+            if jlpt_level is None:
+                jlpt_level = jlpt_data.get(kana)
+
+        if jlpt_level is not None:
+            entry["jlpt"] = jlpt_level
+
         # insert the entry with the stable id
         cursor.execute(
-            "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (stable_id, kanji, kana, primary_rom, translation_preview, rank, pitch_accent, json.dumps(entry, ensure_ascii=False))
+            "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, jlpt, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (stable_id, kanji, kana, primary_rom, translation_preview, rank, pitch_accent, jlpt_level, json.dumps(entry, ensure_ascii=False))
         )
         
         keys = set()

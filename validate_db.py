@@ -1,5 +1,6 @@
 import sqlite3
 import sys
+import json
 
 def validate():
     db_path = "dictionary.db"
@@ -17,6 +18,13 @@ def validate():
                 print(f"CRITICAL ERROR: Missing required table '{table}'")
                 sys.exit(1)
         print("✓ All required tables are present.")
+
+        # Check entries table schema for required columns including jlpt
+        columns = [col[1] for col in cursor.execute("PRAGMA table_info(entries)").fetchall()]
+        if "jlpt" not in columns:
+            print("CRITICAL ERROR: Missing 'jlpt' column in 'entries' table.")
+            sys.exit(1)
+        print("✓ 'jlpt' column present in 'entries' table schema.")
 
         # Version validation in the metadata table
         version = cursor.execute("SELECT value FROM metadata WHERE key='version'").fetchone()
@@ -40,11 +48,18 @@ def validate():
             sys.exit(1)
         print(f"✓ Search index count check passed: {index_count} indices found.")
 
+        # Checking JLPT coverage count
+        jlpt_count = cursor.execute("SELECT COUNT(*) FROM entries WHERE jlpt IS NOT NULL").fetchone()[0]
+        if jlpt_count < 1000:
+            print(f"CRITICAL ERROR: JLPT entries count is suspiciously low ({jlpt_count} entries with JLPT level).")
+            sys.exit(1)
+        print(f"✓ JLPT level check passed: {jlpt_count} entries tagged with JLPT levels.")
+
         # Anchor words verification
         # we check if common jp words exist and have compiled correctly
         anchors = ["日本語", "気", "本"]
         for anchor in anchors:
-            res = cursor.execute("SELECT id, kana, translation FROM entries WHERE kanji=?", (anchor,)).fetchone()
+            res = cursor.execute("SELECT id, kana, translation, jlpt FROM entries WHERE kanji=?", (anchor,)).fetchone()
             if not res:
                 print(f"CRITICAL ERROR: Anchor word '{anchor}' was not compiled into the database.")
                 sys.exit(1)
@@ -53,15 +68,19 @@ def validate():
             if not res[2] or len(res[2].strip()) < 2:
                 print(f"CRITICAL ERROR: Anchor word '{anchor}' has a corrupted or empty translation preview.")
                 sys.exit(1)
+
+            if res[3] is None or not (1 <= res[3] <= 5):
+                print(f"WARNING: Anchor word '{anchor}' missing or invalid JLPT level ({res[3]}).")
         print("✓ Anchor words parsed and verified successfully.")
 
         # Checking structural JSON integrity
-        sample_json_str = cursor.execute("SELECT full_json FROM entries LIMIT 1").fetchone()[0]
-        import json
+        sample_json_str = cursor.execute("SELECT full_json FROM entries WHERE jlpt IS NOT NULL LIMIT 1").fetchone()[0]
         try:
             sample_json = json.loads(sample_json_str)
             if "headwords" not in sample_json or "meanings" not in sample_json:
                 raise ValueError("Missing structured fields inside full_json.")
+            if "jlpt" in sample_json:
+                print(f"✓ Full JSON includes JLPT tag: N{sample_json['jlpt']}")
         except Exception as json_err:
             print(f"CRITICAL ERROR: Failed to parse or validate full_json payload structure: {json_err}")
             sys.exit(1)
