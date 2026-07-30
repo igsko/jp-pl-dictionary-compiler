@@ -376,4 +376,4 @@ if __name__ == "__main__":
     import sys
     # read the version string if passed as a command line argument
     version = sys.argv[1] if len(sys.argv) > 1 else "manual_build"
-    build_sqlite_db_with_pitch("extracted_dictionary.json", "dictionary.db", version)
+    build_sqlite_db_with_pitch("word.csv", "dictionary.db", version)
