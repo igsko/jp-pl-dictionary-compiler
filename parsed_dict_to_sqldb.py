@@ -4,6 +4,34 @@ import urllib.request
 import ssl
 import hashlib
 import re
+import csv
+
+# mapping internal POS codes to standard polish tags for Musubi's parser
+POS_MAP = {
+    "WORD_NOUN": "rzeczownik",
+    "WORD_VERB_U": "czasownik",
+    "WORD_VERB_RU": "czasownik",
+    "WORD_VERB_IRREGULAR": "czasownik",
+    "WORD_VERB_AUX": "czasownik posiłkowy",
+    "WORD_ADJECTIVE_I": "przymiotnik",
+    "WORD_ADJECTIVE_NA": "przymiotnik",
+    "WORD_ADJECTIVE_NO": "przymiotnik",
+    "WORD_ADJECTIVE_F": "przymiotnik",
+    "WORD_PRE_NOUN_ADJECTIVAL": "przymiotnik",
+    "WORD_ADVERB": "przysłówek",
+    "WORD_PRONOUN": "zaimek",
+    "WORD_INTERJECTION": "wykrzyknik",
+    "WORD_CONJUNCTION": "spójnik",
+    "WORD_PREFIX": "przedrostek",
+    "WORD_SUFFIX": "przyrostek",
+    "WORD_NOUN_PREFIX": "przedrostek",
+    "WORD_NOUN_SUFFIX": "przyrostek",
+    "WORD_COUNTER": "klasyfikator",
+    "WORD_NUMBER": "liczebnik",
+    "WORD_EXPRESSION": "wyrażenie",
+    "WORD_PARTICULE": "partykuła",
+    "WORD_COPULA": "łącznik",
+}
 
 def get_stable_id(kanji, kana, romaji, occurrence=0):
     """
@@ -72,17 +100,12 @@ def load_jlpt_data():
                     expr_idx = 0
                     read_idx = 1
 
-                    if 'expression' in header:
-                        expr_idx = header.index('expression')
-                    elif 'word' in header:
-                        expr_idx = header.index('word')
-                    elif 'kanji' in header:
-                        expr_idx = header.index('kanji')
+                    if 'expression' in header: expr_idx = header.index('expression')
+                    elif 'word' in header: expr_idx = header.index('word')
+                    elif 'kanji' in header: expr_idx = header.index('kanji')
 
-                    if 'reading' in header:
-                        read_idx = header.index('reading')
-                    elif 'kana' in header:
-                        read_idx = header.index('kana')
+                    if 'reading' in header: read_idx = header.index('reading')
+                    elif 'kana' in header: read_idx = header.index('kana')
 
                     start_row = 1 if ('expression' in header or 'word' in header or 'kanji' in header) else 0
 
@@ -103,12 +126,9 @@ def load_jlpt_data():
                         norm_expr = to_hiragana(clean_expr)
                         norm_read = to_hiragana(clean_read) if clean_read else norm_expr
 
-                        if (clean_expr, norm_read) not in temp_data:
-                            temp_data[(clean_expr, norm_read)] = level
-                        if (norm_expr, norm_read) not in temp_data:
-                            temp_data[(norm_expr, norm_read)] = level
-                        if clean_expr not in temp_data:
-                            temp_data[clean_expr] = level
+                        if (clean_expr, norm_read) not in temp_data: temp_data[(clean_expr, norm_read)] = level
+                        if (norm_expr, norm_read) not in temp_data: temp_data[(norm_expr, norm_read)] = level
+                        if clean_expr not in temp_data: temp_data[clean_expr] = level
 
             except Exception as e:
                 print(f"Warning: Failed to fetch JLPT level N{level} from {source_name}: {e}")
@@ -146,7 +166,7 @@ def load_jlpt_data():
     return jlpt_data
 
 # modify the build function signature to accept the version string
-def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
+def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
     ssl_context = ssl._create_unverified_context()
 
     # download the Leeds Japanese Word Frequency list
@@ -240,95 +260,112 @@ def build_sqlite_db_with_pitch(source_json, db_path, version_string="unknown"):
     # insert the database version into the metadata table
     cursor.execute("INSERT INTO metadata (key, value) VALUES ('version', ?)", (version_string,))
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_composite ON search_index(key, entry_id)")
-    
-    with open(source_json, 'r', encoding='utf-8') as f:
-        dictionary = json.load(f)
 
     # keeps track of sequential homograph counts during db compilation
     seen_counts = {}
-        
-    print("Populating database...")
-    for entry in dictionary:
-        primary_jap_raw = entry["headwords"][0]["japanese"]
-        primary_rom = entry["headwords"][0]["romaji"]
-        
-        parts = [p.strip() for p in primary_jap_raw.split(',')]
-        if len(parts) >= 2:
-            kanji, kana = parts[0], parts[1]
-        else:
-            kanji, kana = None, parts[0]
-            
-        norm_kana = to_hiragana(kana)
+    print("Parsing upstream word.csv and populating database...")
 
-        # create a unique key based on the headword components
-        hw_key = f"{kanji or ''}#{kana}#{primary_rom}"
+    with open(source_csv,"r",encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row or len(row) < 11:
+                continue
 
-        # retrieve the current occurrence count and increment it
-        occurrence = seen_counts.get(hw_key, 0)
-        seen_counts[hw_key] = occurrence + 1
+            # parse columns from csv
+            raw_pos_str = row[1].strip()
+            category_info = row[4].strip()
+            raw_kanji = row[6].strip()
+            raw_kana = row[7].strip()
+            raw_romaji = row[9].strip()
+            raw_translations = row[10].strip()
+            note_info = row[11].strip() if len(row) > 11 else ""
 
-        translations = []
-        for m in entry["meanings"]:
-            translations.extend(m["translations"])
-        translation_preview = ", ".join(translations[:3])
+            # sanitize Kanji field (treat '-' or empty as no kanji)
+            kanji = raw_kanji if raw_kanji and raw_kanji != "-" else None
+            kana = raw_kana
+            romaji = raw_romaji
+            norm_kana = to_hiragana(kana)
 
-        # generate a stable id
-        stable_id = get_stable_id(kanji, kana, primary_rom, occurrence)
+            if not kana:
+                continue
 
-        # determine frequency rank (
-        # only lookup kanji, fallback to kana if kana-only
-        if kanji:
-            rank = freq_data.get(kanji, 999999)
-        else:
-            rank = freq_data.get(kana, 999999)
-            
-        # determine pitch accent 
-        # map using unified multi-key lookup
-        pitch_accent = None
-        if kanji:
-            pitch_accent = pitch_data.get((kanji, norm_kana))
-            if not pitch_accent:
-                # fallback: try normalized kanji
-                pitch_accent = pitch_data.get((to_hiragana(kanji), norm_kana))
-        else:
-            # kana-only words e.g., "シャーシ"
-            pitch_accent = pitch_data.get((norm_kana, norm_kana))
+            # format primary japanese representation
+            primary_jap = f"{kanji}, {kana}" if kanji else kana
 
-        # determine jlpt level
-        jlpt_level = None
-        if kanji:
-            jlpt_level = jlpt_data.get((kanji, norm_kana))
-            if jlpt_level is None:
-                jlpt_level = jlpt_data.get((to_hiragana(kanji), norm_kana))
-            if jlpt_level is None:
-                jlpt_level = jlpt_data.get(kanji)
-        else:
-            jlpt_level = jlpt_data.get((kana, norm_kana))
-            if jlpt_level is None:
-                jlpt_level = jlpt_data.get((norm_kana, norm_kana))
-            if jlpt_level is None:
-                jlpt_level = jlpt_data.get(kana)
+            hw_key = f"{kanji or ''}#{kana}#{romaji}"
+            occurrence = seen_counts.get(hw_key, 0)
+            seen_counts[hw_key] = occurrence + 1
 
-        if jlpt_level is not None:
-            entry["jlpt"] = jlpt_level
+            # map POS tags to polish equivalents
+            pos_tags = []
+            for pos_code in raw_pos_str.splitlines():
+                mapped = POS_MAP.get(pos_code.strip())
+                if mapped and mapped not in pos_tags:
+                    pos_tags.append(mapped)
 
-        # insert the entry with the stable id
-        cursor.execute(
-            "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, jlpt, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (stable_id, kanji, kana, primary_rom, translation_preview, rank, pitch_accent, jlpt_level, json.dumps(entry, ensure_ascii=False))
-        )
-        
-        keys = set()
-        if kanji: keys.add(kanji.lower().strip())
-        keys.add(kana.lower().strip())
-        keys.add(primary_rom.lower().strip())
-        for t in translations:
-            keys.add(t.lower().strip())
-            
-        for key in keys:
-            if key:
-                cursor.execute("INSERT INTO search_index (key, entry_id) VALUES (?, ?)", (key, stable_id))
-                
+            cat_tags = [c.strip() for c in category_info.splitlines() if c.strip()]
+            metadata_tags = pos_tags + cat_tags
+            if note_info and note_info not in metadata_tags:
+                metadata_tags.append(note_info)
+
+            # split multiline translations into discrete terms
+            translations = [t.strip() for t in raw_translations.splitlines() if t.strip()]
+            if not translations:
+                continue
+
+            translation_preview = ", ".join(translations[:3])
+
+            # construct JSON structure
+            entry_json = {
+                "headwords": [
+                    {
+                        "japanese": primary_jap,
+                        "romaji": romaji,
+                        "note": note_info if note_info and len(note_info) < 40 else None
+                    }
+                ],
+                "meanings": [
+                    {
+                        "index": 1,
+                        "translations": translations,
+                        "metadata": metadata_tags
+                    }
+                ]
+            }
+
+            stable_id = get_stable_id(kanji, kana, romaji, occurrence)
+
+            # frequency lookup
+            if kanji:
+                rank = freq_data.get(kanji, 999999)
+                pitch_accent = pitch_data.get((kanji, norm_kana)) or pitch_data.get((to_hiragana(kanji), norm_kana))
+                jlpt_level = jlpt_data.get((kanji, norm_kana)) or jlpt_data.get((to_hiragana(kanji), norm_kana)) or jlpt_data.get(kanji)
+            else:
+                rank = freq_data.get(kana, 999999)
+                pitch_accent = pitch_data.get((norm_kana, norm_kana))
+                jlpt_level = jlpt_data.get((kana, norm_kana)) or jlpt_data.get((norm_kana, norm_kana)) or jlpt_data.get(kana)
+
+            if jlpt_level is not None:
+                entry_json["jlpt"] = jlpt_level
+
+            # insert main record
+            cursor.execute(
+                "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, jlpt, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (stable_id, kanji, kana, romaji, translation_preview, rank, pitch_accent, jlpt_level, json.dumps(entry_json, ensure_ascii=False))
+            )
+
+            # build search index keys
+            keys = set()
+            if kanji: keys.add(kanji.lower().strip())
+            keys.add(kana.lower().strip())
+            if romaji: keys.add(romaji.lower().strip())
+            for t in translations:
+                keys.add(t.lower().strip())
+
+            for key in keys:
+                if key:
+                    cursor.execute("INSERT INTO search_index (key, entry_id) VALUES (?, ?)", (key, stable_id))
+
     conn.commit()
     cursor.execute("VACUUM")
     conn.close()
