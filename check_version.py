@@ -21,8 +21,8 @@ def check():
     # default to "igsko/jp-pl-dictionary-compiler" if GITHUB_REPOSITORY environment is not set
     my_repo = os.environ.get("GITHUB_REPOSITORY", "igsko/jp-pl-dictionary-compiler")
     
-    # scrape the website for the latest version string
-    api_url = f"https://api.github.com/repos/{repo}/commits?path={file_path}&per_page=1"
+    # check github for the latest version string
+    api_url = f"https://api.github.com/repos/{upstream_repo}/commits?path={file_path}&per_page=1"
     req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
     scraped_version = ""
 
