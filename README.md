@@ -1,14 +1,20 @@
 # JP-PL Dictionary Compiler
 
-Automated data pipeline that checks for updates on `japonski-pomocnik.pl`, scrapes the dictionary PDF, parses its content, and compiles it into an offline SQLite database with NHK pitch accent notation and Leeds vocabulary frequency rankings.
+Automated data pipeline that polls the open-source [JaponskiPomocnik repository](https://github.com/dedyk/JaponskiPomocnik) for dictionary updates, downloads the raw structured vocabulary dataset (`word.csv`), and compiles it into an offline SQLite database enriched with NHK pitch accent notation, Leeds vocabulary frequency rankings, and JLPT level tags.
 
 ## Local execution
 
 1. Create a virtual environment and install dependencies:
    ```bash
    python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
+   source venv/bin/activate   # On Windows: venv\Scripts\activate
+
+2. Download the latest upstream dataset and compile the database:
+   ```bash
+   # Downloads word.csv from upstream and compiles dictionary.db
+   python check_version.py --force true
+   python parsed_dict_to_sqldb.py 20260702
+   python validate_db.py
 
 ## Credits & data sources
 
