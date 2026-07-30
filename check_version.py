@@ -4,6 +4,7 @@ import urllib.request
 import json
 import ssl
 import argparse
+import sys
 
 def check():
     ssl_context = ssl._create_unverified_context()
@@ -13,8 +14,12 @@ def check():
     parser.add_argument("--custom-version", type=str, default="", help="Optional custom version override")
     args = parser.parse_args()
 
-    repo = "dedyk/JaponskiPomocnik"
+    # upstream data source
+    upstream_repo = "dedyk/JaponskiPomocnik"
     file_path = "db/word.csv"
+
+    # default to "igsko/jp-pl-dictionary-compiler" if GITHUB_REPOSITORY environment is not set
+    my_repo = os.environ.get("GITHUB_REPOSITORY", "igsko/jp-pl-dictionary-compiler")
     
     # scrape the website for the latest version string
     api_url = f"https://api.github.com/repos/{repo}/commits?path={file_path}&per_page=1"
@@ -35,20 +40,19 @@ def check():
                 
                 print(f"Latest upstream DB ver: {scraped_version}")
     except Exception as e:
-        print(f"Error fetching from GitHub API: {e}")
+        print(f"ERROR: Error fetching from GitHub API: {e}")
+        sys.exit(1)
 
     # if a custom version tag is supplied, override the scraped version
     if args.custom_version.strip():
         scraped_version = args.custom_version.strip()
         print(f"Applying custom version tag override: {scraped_version}")
     elif not scraped_version:
-        print("Could not find version string upstream and no custom version supplied")
-        return
+        print("ERROR: Could not find version string upstream and no custom version supplied")
+        sys.exit(1)
 
     # get the latest release tag from GitHub's API
-    # default to "igsko/jp-pl-dictionary-compiler" if GITHUB_REPOSITORY environment is not set
-    repo = os.environ.get("GITHUB_REPOSITORY", "igsko/jp-pl-dictionary-compiler")
-    github_url = f"https://api.github.com/repos/{repo}/releases/latest"
+    github_url = f"https://api.github.com/repos/{my_repo}/releases/latest"
     gh_req = urllib.request.Request(github_url, headers={'User-Agent': 'Mozilla/5.0'})
     
     latest_version_base = ""
@@ -61,10 +65,12 @@ def check():
                 latest_version_base = match_date.group(0)
                 print(f"Parsed base version from GitHub: {latest_version_base}")
     except Exception as e:
-        print(f"No previous release found on GitHub or error fetching: {e}")
+        print(f"Notice: No previous release found on GitHub or error fetching: {e}")
 
     new_version = "false"
-    force_build = args.force.lower() == "true"
+    force_build = str(args.force).lower() in ["true", "1", "yes"]
+    if force_build:
+        print("Force build flag is TRUE. Forcing database compilation pipeline...")
 
     # Trigger the database compilation pipeline only if the scraped website version
     # is strictly newer than the base date of the latest GitHub release,
@@ -76,7 +82,7 @@ def check():
         new_version = "true"
         
         # download the raw CSV
-        csv_url = f"https://raw.githubusercontent.com/{repo}/master/{file_path}"
+        csv_url = f"https://raw.githubusercontent.com/{upstream_repo}/master/{file_path}"
         print(f"Downloading data from {csv_url}...")
         csv_req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
 
@@ -86,8 +92,8 @@ def check():
                     f.write(csv_resp.read())
             print("CSV downloaded successfully!")
         except Exception as e:
-            print(f"Failed to download CSV: {e}")
-            new_version = "false"
+            print(f"ERROR: Failed to download CSV from {csv_url}: {e}")
+            sys.exit(1)
     else:
         print("Database is already up-to-date. Skipping compilation.")
 
