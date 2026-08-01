@@ -5,6 +5,7 @@ import ssl
 import hashlib
 import re
 import csv
+import sys
 
 # mapping internal POS codes to standard polish tags for Musubi's parser
 POS_MAP = {
@@ -308,12 +309,24 @@ def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
             if note_info and note_info not in metadata_tags:
                 metadata_tags.append(note_info)
 
-            # split multiline translations into discrete terms
-            translations = [t.strip() for t in raw_translations.splitlines() if t.strip()]
-            if not translations:
+            # split multiline translations into individual definition lines
+            translation_lines = [t.strip() for t in raw_translations.splitlines() if t.strip()]
+            if not translation_lines:
                 continue
 
-            translation_preview = ", ".join(translations[:3])
+            translation_preview = ", ".join(translation_lines[:3])
+
+            # build multiple meaning objects (1 per line in the csv)
+            meanings_list = []
+            for idx, line in enumerate(translation_lines, 1):
+                # Attach primary metadata (POS, category, notes) to the first sense definition,
+                # and attach POS tags to subsequent sense definitions
+                meaning_meta = metadata_tags if idx == 1 else pos_tags
+                meanings_list.append({
+                    "index": idx,
+                    "translations": [line],
+                    "metadata": meaning_meta
+                })
 
             # construct JSON structure
             entry_json = {
@@ -324,13 +337,7 @@ def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
                         "note": note_info if note_info and len(note_info) < 40 else None
                     }
                 ],
-                "meanings": [
-                    {
-                        "index": 1,
-                        "translations": translations,
-                        "metadata": metadata_tags
-                    }
-                ]
+                "meanings": meanings_list
             }
 
             stable_id = get_stable_id(kanji, kana, romaji, occurrence)
@@ -359,7 +366,7 @@ def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
             if kanji: keys.add(kanji.lower().strip())
             keys.add(kana.lower().strip())
             if romaji: keys.add(romaji.lower().strip())
-            for t in translations:
+            for t in translation_lines:
                 keys.add(t.lower().strip())
 
             for key in keys:
