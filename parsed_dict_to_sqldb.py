@@ -371,10 +371,11 @@ def build_sqlite_db(source_xml, db_path, version_string="unknown"):
         # B: extract reading elements (<r_ele><reb> & <romaji>)
         readings = []
         for r in entry.findall('r_ele'):
-            reb = r.findtext('reb')
-            rom = r.findtext('romaji')
-            if reb:
-                readings.append((reb.strip(), rom.strip() if rom else ""))
+            reb_node = r.find('reb')
+            if reb_node is not None and reb_node.text:
+                reb = reb_node.text.strip()
+                rom = reb_node.attrib.get('romaji', '').strip()
+                readings.append((reb, rom))
         if not readings:
             continue
 
