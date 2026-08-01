@@ -452,7 +452,7 @@ def build_sqlite_db(source_xml, db_path, version_string="unknown"):
             if s_infs:
                 metadata.extend(s_infs)
             if xrefs:
-                metadata.extend([f"zobacz również: {xref}" for xref in xrefs])
+                metadata.extend([f"zobacz również {xref}" for xref in xrefs])
 
             meanings_list.append({
                 "index": s_idx,
