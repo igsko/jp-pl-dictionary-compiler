@@ -14,15 +14,11 @@ def check():
     parser.add_argument("--custom-version", type=str, default="", help="Optional custom version override")
     args = parser.parse_args()
 
-    # upstream data source
     upstream_repo = "dedyk/JaponskiPomocnik"
-    file_path = "db/word.csv"
-
-    # default to "igsko/jp-pl-dictionary-compiler" if GITHUB_REPOSITORY environment is not set
     my_repo = os.environ.get("GITHUB_REPOSITORY", "igsko/jp-pl-dictionary-compiler")
     
     # check github for the latest version string
-    api_url = f"https://api.github.com/repos/{upstream_repo}/commits?path={file_path}&per_page=1"
+    api_url = f"https://api.github.com/repos/{upstream_repo}/commits?path=db&per_page=1"
     req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
     scraped_version = ""
 
@@ -82,17 +78,27 @@ def check():
         new_version = "true"
         
         # download the raw CSV
-        csv_url = f"https://raw.githubusercontent.com/{upstream_repo}/master/{file_path}"
-        print(f"Downloading data from {csv_url}...")
-        csv_req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
+        contents_url = f"https://api.github.com/repos/{upstream_repo}/contents/db"
+        c_req = urllib.request.Request(contents_url, headers={'User-Agent': 'Mozilla/5.0'})
 
         try:
-            with urllib.request.urlopen(csv_req, context=ssl_context) as csv_resp:
-                with open("word.csv", "wb") as f:
-                    f.write(csv_resp.read())
-            print("CSV downloaded successfully!")
+            with urllib.request.urlopen(c_req, context=ssl_context) as resp:
+                files = json.loads(resp.read().decode('utf-8'))
+                xml_chunks = [f for f in files if f['name'].startswith('word2.xml_')]
+                xml_chunks.sort(key=lambda x: x['name'])
+
+                print(f"Found {len(xml_chunks)} XML chunks. Downloading and merging...")
+                with open("word2.xml", "wb") as outfile:
+                    for chunk in xml_chunks:
+                        chunk_url = chunk['download_url']
+                        down_req = urllib.request.Request(chunk_url, headers={'User-Agent': 'Mozilla/5.0'})
+                        print(f"Downloading {chunk['name']}...")
+                        with urllib.request.urlopen(down_req, context=ssl_context) as down_resp:
+                            outfile.write(down_resp.read())
+
+                print("word2.xml successfully assembled!")
         except Exception as e:
-            print(f"ERROR: Failed to download CSV from {csv_url}: {e}")
+            print(f"ERROR: Failed to download XML from {contents_url}: {e}")
             sys.exit(1)
     else:
         print("Database is already up-to-date. Skipping compilation.")

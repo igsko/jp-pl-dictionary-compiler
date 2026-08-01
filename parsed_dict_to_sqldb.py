@@ -4,41 +4,77 @@ import urllib.request
 import ssl
 import hashlib
 import re
-import csv
 import sys
+import time
+import xml.etree.ElementTree as ET
 
 # mapping internal POS codes to standard polish tags for Musubi's parser
-POS_MAP = {
-    "WORD_NOUN": "rzeczownik",
-    "WORD_VERB_U": "czasownik",
-    "WORD_VERB_RU": "czasownik",
-    "WORD_VERB_IRREGULAR": "czasownik",
-    "WORD_VERB_AUX": "czasownik posiłkowy",
-    "WORD_ADJECTIVE_I": "przymiotnik",
-    "WORD_ADJECTIVE_NA": "przymiotnik",
-    "WORD_ADJECTIVE_NO": "przymiotnik",
-    "WORD_ADJECTIVE_F": "przymiotnik",
-    "WORD_PRE_NOUN_ADJECTIVAL": "przymiotnik",
-    "WORD_ADVERB": "przysłówek",
-    "WORD_PRONOUN": "zaimek",
-    "WORD_INTERJECTION": "wykrzyknik",
-    "WORD_CONJUNCTION": "spójnik",
-    "WORD_PREFIX": "przedrostek",
-    "WORD_SUFFIX": "przyrostek",
-    "WORD_NOUN_PREFIX": "przedrostek",
-    "WORD_NOUN_SUFFIX": "przyrostek",
-    "WORD_COUNTER": "klasyfikator",
-    "WORD_NUMBER": "liczebnik",
-    "WORD_EXPRESSION": "wyrażenie",
-    "WORD_PARTICULE": "partykuła",
-    "WORD_COPULA": "łącznik",
-}
+def map_pos_string(pos_str):
+    """
+    Maps English JMdict POS strings to standard Polish labels
+    matching Musubi's grammar tag parser (e.g. 'noun' -> 'rzeczownik').
+
+    Args:
+        pos_str (str): Raw POS string from XML (e.g., 'noun (common) (futsuumeishi)').
+
+    Returns:
+        str | None: Normalized Polish POS string, or None if unmapped.
+    """
+    if not pos_str: return None
+    pos_str = pos_str.lower().strip()
+    if 'noun' in pos_str and 'adjectival' not in pos_str: return 'rzeczownik'
+    if 'verb' in pos_str: return 'czasownik'
+    if 'adjective' in pos_str or 'adjectival' in pos_str: return 'przymiotnik'
+    if 'adverb' in pos_str: return 'przysłówek'
+    if 'pronoun' in pos_str: return 'zaimek'
+    if 'interjection' in pos_str: return 'wykrzyknik'
+    if 'conjunction' in pos_str: return 'spójnik'
+    if 'prefix' in pos_str: return 'przedrostek'
+    if 'suffix' in pos_str: return 'przyrostek'
+    if 'counter' in pos_str: return 'klasyfikator'
+    if 'number' in pos_str: return 'liczebnik'
+    if 'expression' in pos_str: return 'wyrażenie'
+    return pos_str
+
+def ensure_valid_xml(xml_path):
+    """Sanitizes word2.xml by ensuring there is exactly one XML header and one root element."""
+    with open(xml_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    # if multiple headers/roots are detected, clean up the XML structure in-place
+    if content.count("<?xml") > 1 or content.count("<JMdict>") > 1:
+        print("Detected raw concatenated XML. Sanitizing XML structure...")
+
+        # strip all XML declarations
+        content = re.sub(r'<\?xml.*?\?>', '', content, flags=re.DOTALL)
+
+        # strip all intermediate <JMdict> root tags
+        content = content.replace('<JMdict>', '').replace('</JMdict>', '')
+
+        # re-wrap in a single root element
+        clean_xml = '<?xml version="1.0" encoding="UTF-8"?>\n<JMdict>\n' + content + '\n</JMdict>'
+        
+        with open(xml_path, "w", encoding="utf-8") as f:
+            f.write(clean_xml)
+        print("word2.xml structure sanitized successfully!")
 
 def get_stable_id(kanji, kana, romaji, occurrence=0):
     """
-    Generates a highly stable, collision-free, deterministic 63-bit 
-    positive integer ID based on the entry's headwords and a sequential
-    occurence counter for homographs.
+    Generates a deterministic 53-bit unsigned integer ID derived from a SHA-256 hash.
+    
+    Why 53 bits?
+    JavaScript's `Number.MAX_SAFE_INTEGER` is 2^53 - 1 (9,007,199,254,740,991).
+    Restricting integer IDs to 53 bits prevents IEEE 754 precision truncation
+    when IDs are passed over IPC to the Svelte frontend.
+
+    Args:
+        kanji (str | None): Kanji representation of the headword.
+        kana (str): Kana reading.
+        romaji (str): Romaji transcription.
+        occurrence (int): A number to ensure unique IDs for duplicate entries.
+
+    Returns:
+        int: Deterministic 53-bit positive integer ID.
     """
     # combine the unique characteristics of the entry
     key = f"{kanji or ''}#{kana}#{romaji}#{occurrence}"
@@ -53,12 +89,20 @@ def get_stable_id(kanji, kana, romaji, occurrence=0):
     return unsigned_val & 0x1FFFFFFFFFFFFF
 
 def to_hiragana(text):
-    """Converts Katakana characters to Hiragana for uniform alignment matching."""
+    """Converts Katakana characters to Hiragana for uniform alignment matching.
+
+    Args:
+        text (str): Input Japanese text.
+
+    Returns:
+        str: Converted Hiragana text.
+    """
     if not text:
         return ""
     result = []
     for char in text:
         code = ord(char)
+        # shift Katakana unicode range (0x30A1-0x30F6) down to Hiragana (0x3041-0x3096)
         if 0x30A1 <= code <= 0x30F6:
             result.append(chr(code - 0x60))
         else:
@@ -66,14 +110,23 @@ def to_hiragana(text):
     return "".join(result)
 
 def clean_pitch_reading(text):
-    """Strips NHK pitch arrow symbols to isolate the clean Hiragana reading."""
+    """
+    Strips NHK pitch arrow notation symbols (ꜛ, ꜜ, *, ~) to isolate clean Hiragana.
+
+    Args:
+        text (str): Raw NHK pitch accent text.
+
+    Returns:
+        str: Clean Hiragana reading.
+    """
     return text.replace('ꜛ', '').replace('ꜜ', '').replace('*', '').replace('~', '').strip()
 
 def load_jlpt_data():
     """
     Downloads JLPT vocabulary datasets (N5 to N1) and returns a lookup dictionary.
-    Keys can be (kanji_or_kana, norm_reading) tuples or plain kanji/kana strings.
-    Values are integer JLPT levels (5=N5, 4=N4, 3=N3, 2=N2, 1=N1).
+
+    Returns:
+        dict: Mapping of (word, reading) tuples or plain words to JLPT levels (5=N5 .. 1=N1).
     """
     ssl_context = ssl._create_unverified_context()
     print("Downloading JLPT vocabulary datasets...")
@@ -166,11 +219,28 @@ def load_jlpt_data():
 
     return jlpt_data
 
-# modify the build function signature to accept the version string
-def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
+def build_sqlite_db(source_xml, db_path, version_string="unknown"):
+    """
+    Main compilation routine:
+    1. Downloads external enrichment datasets (frequency rankings, pitch accent, JLPT levels).
+    2. Configures SQLite connection PRAGMAs.
+    3. Parses `word2.xml` and constructs structured JSON entry payloads.
+    4. Performs batch record insertions and creates the search index after data insertion.
+    5. Saves all changes and optimizes the final database file size.
+
+    Args:
+        source_xml (str): Input XML file path (`word2.xml`).
+        db_path (str): Output SQLite database file path (`dictionary.db`).
+        version_string (str): Version metadata string (e.g., '20260702').
+    """
+    start_time = time.time()
     ssl_context = ssl._create_unverified_context()
 
-    # download the Leeds Japanese Word Frequency list
+    # -------------------------------------------------------------------------
+    # DOWNLOAD EXTERNAL DATASETS FOR ENRICHMENT
+    # -------------------------------------------------------------------------
+
+    # A. download the Leeds Japanese Word Frequency list
     print("Downloading Japanese frequency list...")
     freq_url = "https://raw.githubusercontent.com/hingston/japanese/master/44998-japanese-words.txt"
     freq_data = {}
@@ -187,7 +257,7 @@ def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
     except Exception as e:
         print(f"Could not load frequency list: {e}. Defaulting to unranked (999999).")
 
-    # download the NHK Pitch Accent dataset from Lorenzi's jisho repo
+    # B. download the NHK Pitch Accent dataset from Lorenzi's jisho repo
     print("Downloading NHK Pitch Accent dataset...")
     pitch_url = "https://raw.githubusercontent.com/hlorenzi/jisho-open/main/backend/src/data/pitch_accent.txt"
     pitch_data = {}
@@ -218,26 +288,32 @@ def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
     except Exception as e:
         print(f"Could not load pitch accent dataset: {e}. Defaulting to no pitch.")
 
-    # download JLPT level dataset
+    # C. download JLPT level dataset
     jlpt_data = load_jlpt_data()
-    
+
+    # -------------------------------------------------------------------------
+    # DATABASE INITIALIZATION
+    # -------------------------------------------------------------------------
+
     # add the metadata table structure
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    
+
+    # OPTIMIZATION: in-memory SQLite pragmas for bulk insertion
+    cursor.execute("PRAGMA synchronous = OFF")
+    cursor.execute("PRAGMA journal_mode = MEMORY")
+    cursor.execute("PRAGMA cache_size = 1000000")
+    cursor.execute("PRAGMA temp_store = MEMORY")
+
+    # reset schema tables
     cursor.execute("DROP TABLE IF EXISTS entries")
     cursor.execute("DROP TABLE IF EXISTS search_index")
     cursor.execute("DROP TABLE IF EXISTS metadata")
     
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS metadata (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
+    cursor.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS entries (
+        CREATE TABLE entries (
             id INTEGER PRIMARY KEY,
             kanji TEXT,
             kana TEXT,
@@ -251,136 +327,251 @@ def build_sqlite_db_with_pitch(source_csv, db_path, version_string="unknown"):
     """)
     
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS search_index (
+        CREATE TABLE search_index (
             key TEXT,
             entry_id INTEGER,
             FOREIGN KEY(entry_id) REFERENCES entries(id)
         )
     """)
     
-    # insert the database version into the metadata table
+    # save database version
     cursor.execute("INSERT INTO metadata (key, value) VALUES ('version', ?)", (version_string,))
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_search_composite ON search_index(key, entry_id)")
 
+    # -------------------------------------------------------------------------
+    # SANITIZE & PARSE XML
+    # -------------------------------------------------------------------------
+    ensure_valid_xml(source_xml)
+
+    print(f"Parsing XML database from {source_xml}...")
+    tree = ET.parse(source_xml)
+    root = tree.getroot()
+    entries_elements = root.findall('entry')
+    total_entries = len(entries_elements)
+
+    print(f"Processing {total_entries} entries...")
+
+    xml_lang_attr = "{http://www.w3.org/XML/1998/namespace}lang"
     # keeps track of sequential homograph counts during db compilation
     seen_counts = {}
-    print("Parsing upstream word.csv and populating database...")
 
-    with open(source_csv,"r",encoding="utf-8") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row or len(row) < 11:
+    # batch buffers for executemany inserts to improve performance
+    entries_batch = []
+    search_index_batch = []
+    BATCH_SIZE = 10000
+
+    parse_start_time = time.time()
+
+    # -------------------------------------------------------------------------
+    # MAIN INGESTION LOOP
+    # -------------------------------------------------------------------------
+    for idx, entry in enumerate(entries_elements, 1):
+        # A: extract kanji elements (<k_ele><keb>)
+        kanjis = [k.findtext('keb').strip() for k in entry.findall('k_ele') if k.findtext('keb')]
+
+        # B: extract reading elements (<r_ele><reb> & <romaji>)
+        readings = []
+        for r in entry.findall('r_ele'):
+            reb = r.findtext('reb')
+            rom = r.findtext('romaji')
+            if reb:
+                readings.append((reb.strip(), rom.strip() if rom else ""))
+        if not readings:
+            continue
+
+        primary_kanji = kanjis[0] if kanjis else None
+        primary_kana, primary_romaji = readings[0]
+
+        primary_jap = f"{primary_kanji}, {primary_kana}" if primary_kanji else primary_kana
+
+        # build headwords list, including alternate readings/spellings
+        headwords_list = [{
+            "japanese": primary_jap,
+            "romaji": primary_romaji,
+            "note": None
+        }]
+
+        # append alternative readings (e.g. 'もん' / 'モノ')
+        for reb, rom in readings[1:]:
+            alt_jap = f"{primary_kanji}, {reb}" if primary_kanji else reb
+            headwords_list.append({
+                "japanese": alt_jap,
+                "romaji": rom,
+                "note": None
+            })
+
+        #append alternative kanji spellings
+        for k_text in kanjis[1:]:
+            alt_jap = f"{k_text}, {primary_kana}"
+            headwords_list.append({
+                "japanese": alt_jap,
+                "romaji": primary_romaji,
+                "note": None
+            })
+
+        # C: extract meanings (<sense>)
+        meanings_list=[]
+        all_glosses_for_preview = []
+
+        for s_idx, sense in enumerate(entry.findall('sense'), 1):
+            # extract Polish translations
+            pol_glosses = []
+            for g in sense.findall('gloss'):
+                lang = g.attrib.get(xml_lang_attr) or g.attrib.get('xml:lang')
+                if lang == 'pol' and g.text and g.text.strip():
+                    pol_glosses.append(g.text.strip())
+
+            # fallback to English if no Polish translation
+            if not pol_glosses:
+                for g in sense.findall('gloss'):
+                    lang = g.attrib.get(xml_lang_attr) or g.attrib.get('xml:lang')
+                    if lang == 'eng' and g.text and g.text.strip():
+                        pol_glosses.append(g.text.strip())
+
+            if not pol_glosses:
                 continue
 
-            # parse columns from csv
-            raw_pos_str = row[1].strip()
-            category_info = row[4].strip()
-            raw_kanji = row[6].strip()
-            raw_kana = row[7].strip()
-            raw_romaji = row[9].strip()
-            raw_translations = row[10].strip()
-            note_info = row[11].strip() if len(row) > 11 else ""
+            all_glosses_for_preview.extend(pol_glosses)
 
-            # sanitize Kanji field (treat '-' or empty as no kanji)
-            kanji = raw_kanji if raw_kanji and raw_kanji != "-" else None
-            kana = raw_kana
-            romaji = raw_romaji
-            norm_kana = to_hiragana(kana)
+            # map POS tags and deduplicate
+            pos_tags_raw = [map_pos_string(p.text) for p in sense.findall('pos') if p.text and map_pos_string(p.text)]
+            pos_tags = list(dict.fromkeys(pos_tags_raw))  # remove duplicates while preserving order
 
-            if not kana:
-                continue
+            # extract usage notes (<s_inf>)
+            s_infs = []
+            for s in sense.findall('s_inf'):
+                lang = s.attrib.get(xml_lang_attr) or s.attrib.get('xml:lang')
+                if (lang == 'pol' or not lang) and s.text and s.text.strip():
+                    s_infs.append(s.text.strip())
 
-            # format primary japanese representation
-            primary_jap = f"{kanji}, {kana}" if kanji else kana
+            # extract cross-references (<xref>)     
+            xrefs = [x.text.strip() for x in sense.findall('xref') if x.text and x.text.strip()]
 
-            hw_key = f"{kanji or ''}#{kana}#{romaji}"
-            occurrence = seen_counts.get(hw_key, 0)
-            seen_counts[hw_key] = occurrence + 1
+            metadata = []
+            if pos_tags:
+                metadata.extend(pos_tags)
+            if s_infs:
+                metadata.extend(s_infs)
+            if xrefs:
+                metadata.extend([f"zobacz również: {xref}" for xref in xrefs])
 
-            # map POS tags to polish equivalents
-            pos_tags = []
-            for pos_code in raw_pos_str.splitlines():
-                mapped = POS_MAP.get(pos_code.strip())
-                if mapped and mapped not in pos_tags:
-                    pos_tags.append(mapped)
+            meanings_list.append({
+                "index": s_idx,
+                "translations": pol_glosses,
+                "metadata": metadata
+            })
 
-            cat_tags = [c.strip() for c in category_info.splitlines() if c.strip()]
-            metadata_tags = pos_tags + cat_tags
-            if note_info and note_info not in metadata_tags:
-                metadata_tags.append(note_info)
+        if not meanings_list:
+            continue
 
-            # split multiline translations into individual definition lines
-            translation_lines = [t.strip() for t in raw_translations.splitlines() if t.strip()]
-            if not translation_lines:
-                continue
+        # short summary preview for search results list
+        translation_preview = ", ".join(all_glosses_for_preview[:3])
 
-            translation_preview = ", ".join(translation_lines[:3])
+        # generate stable collision-free ID
+        hw_key = f"{primary_kanji or ''}#{primary_kana}#{primary_romaji}"
+        occurrence = seen_counts.get(hw_key, 0)
+        seen_counts[hw_key] = occurrence + 1
 
-            # build multiple meaning objects (1 per line in the csv)
-            meanings_list = []
-            for idx, line in enumerate(translation_lines, 1):
-                # Attach primary metadata (POS, category, notes) to the first sense definition,
-                # and attach POS tags to subsequent sense definitions
-                meaning_meta = metadata_tags if idx == 1 else pos_tags
-                meanings_list.append({
-                    "index": idx,
-                    "translations": [line],
-                    "metadata": meaning_meta
-                })
+        stable_id = get_stable_id(primary_kanji, primary_kana, primary_romaji, occurrence) 
+        norm_kana = to_hiragana(primary_kana)
 
-            # construct JSON structure
-            entry_json = {
-                "headwords": [
-                    {
-                        "japanese": primary_jap,
-                        "romaji": romaji,
-                        "note": note_info if note_info and len(note_info) < 40 else None
-                    }
-                ],
-                "meanings": meanings_list
-            }
+        # D: enrich with frequency rank, pitch accent, and JLPT level
+        if primary_kanji:
+            rank = freq_data.get(primary_kanji, 999999)
+            pitch_accent = pitch_data.get((primary_kanji, norm_kana)) or pitch_data.get((to_hiragana(primary_kanji), norm_kana))
+            jlpt_level = jlpt_data.get((primary_kanji, norm_kana)) or jlpt_data.get((to_hiragana(primary_kanji), norm_kana)) or jlpt_data.get(primary_kanji)
+        else:
+            rank = freq_data.get(primary_kana, 999999)
+            pitch_accent = pitch_data.get((norm_kana, norm_kana))
+            jlpt_level = jlpt_data.get((primary_kana, norm_kana)) or jlpt_data.get((norm_kana, norm_kana)) or jlpt_data.get(primary_kana)
 
-            stable_id = get_stable_id(kanji, kana, romaji, occurrence)
+        entry_json = {
+            "headwords": headwords_list,
+            "meanings": meanings_list
+        }
 
-            # frequency lookup
-            if kanji:
-                rank = freq_data.get(kanji, 999999)
-                pitch_accent = pitch_data.get((kanji, norm_kana)) or pitch_data.get((to_hiragana(kanji), norm_kana))
-                jlpt_level = jlpt_data.get((kanji, norm_kana)) or jlpt_data.get((to_hiragana(kanji), norm_kana)) or jlpt_data.get(kanji)
-            else:
-                rank = freq_data.get(kana, 999999)
-                pitch_accent = pitch_data.get((norm_kana, norm_kana))
-                jlpt_level = jlpt_data.get((kana, norm_kana)) or jlpt_data.get((norm_kana, norm_kana)) or jlpt_data.get(kana)
+        if jlpt_level is not None:
+            entry_json["jlpt"] = jlpt_level
 
-            if jlpt_level is not None:
-                entry_json["jlpt"] = jlpt_level
+        # queue entry record
+        entries_batch.append((
+            stable_id, primary_kanji, primary_kana, primary_romaji, 
+            translation_preview, rank, pitch_accent, jlpt_level, 
+            json.dumps(entry_json, ensure_ascii=False)
+        ))
 
-            # insert main record
-            cursor.execute(
+        # queue search index keys (kanji, kana, romaji, readings, glosses)
+        keys = set()
+        if primary_kanji: keys.add(primary_kanji.lower().strip())
+        keys.add(primary_kana.lower().strip())
+        if primary_romaji: keys.add(primary_romaji.lower().strip())
+        for r_text, r_rom in readings[1:]:
+            keys.add(r_text.lower().strip())
+            if r_rom: keys.add(r_rom.lower().strip())
+        for g_text in all_glosses_for_preview:
+            keys.add(g_text.lower().strip())
+
+        for key in keys:
+            if key:
+                cursor.execute("INSERT INTO search_index (key, entry_id) VALUES (?, ?)", (key, stable_id))
+
+        # E: BATCH EXECUTION: flush batches every 10k items
+        if len(entries_batch) >= BATCH_SIZE:
+            cursor.executemany(
                 "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, jlpt, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (stable_id, kanji, kana, romaji, translation_preview, rank, pitch_accent, jlpt_level, json.dumps(entry_json, ensure_ascii=False))
+                entries_batch
             )
+            cursor.executemany(
+                "INSERT INTO search_index (key, entry_id) VALUES (?, ?)",
+                search_index_batch
+            )
+            entries_batch.clear()
+            search_index_batch.clear()
 
-            # build search index keys
-            keys = set()
-            if kanji: keys.add(kanji.lower().strip())
-            keys.add(kana.lower().strip())
-            if romaji: keys.add(romaji.lower().strip())
-            for t in translation_lines:
-                keys.add(t.lower().strip())
+        # progress meter
+        if idx % 10000 == 0 or idx == total_entries:
+            elapsed = time.time() - parse_start_time
+            speed = idx / elapsed if elapsed > 0 else 0
+            percent = (idx / total_entries) * 100
+            print(f"Progress: [{idx:,} / {total_entries:,}] ({percent:.1f}%) - {speed:,.0f} entries/sec")
 
-            for key in keys:
-                if key:
-                    cursor.execute("INSERT INTO search_index (key, entry_id) VALUES (?, ?)", (key, stable_id))
+    # -------------------------------------------------------------------------
+    # FLUSH REMAINING BATCHES & DEFERRED B-TREE INDEX CREATION
+    # -------------------------------------------------------------------------
+    if entries_batch:
+        cursor.executemany(
+            "INSERT INTO entries (id, kanji, kana, romaji, translation, frequency_rank, pitch_accent, jlpt, full_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            entries_batch
+        )
+    if search_index_batch:
+        cursor.executemany(
+            "INSERT INTO search_index (key, entry_id) VALUES (?, ?)",
+            search_index_batch
+        )
 
+    # SPEED OPTIMIZATION: construct composite search index AFTER all rows are inserted
+    print("Building search index B-tree...")
+    index_start_time = time.time()
+    cursor.execute("CREATE INDEX idx_search_composite ON search_index(key, entry_id)")
+    print(f"Index built in {time.time() - index_start_time:.2f} seconds.")
+
+    # -------------------------------------------------------------------------
+    # COMMIT & CLEANUP
+    # -------------------------------------------------------------------------
+    print("Committing transactions to disk...")
     conn.commit()
+
+    print("Compacting and defragmenting SQLite database (VACUUM)...")
+    vacuum_start_time = time.time()
     cursor.execute("VACUUM")
+    print(f"Database compacted in {time.time() - vacuum_start_time:.2f} seconds.")
     conn.close()
-    print("Database compiled successfully!")
+
+    total_time = time.time() - start_time
+    print(f"Database compiled successfully in {total_time:.2f} seconds!")
 
 # execute the compiler
 if __name__ == "__main__":
     import sys
     # read the version string if passed as a command line argument
     version = sys.argv[1] if len(sys.argv) > 1 else "manual_build"
-    build_sqlite_db_with_pitch("word.csv", "dictionary.db", version)
+    build_sqlite_db("word2.xml", "dictionary.db", version)
