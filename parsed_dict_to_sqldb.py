@@ -445,7 +445,21 @@ def build_sqlite_db(source_xml, db_path, version_string="unknown"):
                     s_infs.append(s.text.strip())
 
             # extract cross-references (<xref>)     
-            xrefs = [x.text.strip() for x in sense.findall('xref') if x.text and x.text.strip()]
+            # build set of this entry's own kanji & kana to suppress self-referencing xrefs
+            self_keys = set()
+            if primary_kanji: self_keys.add(primary_kanji)
+            if primary_kana: self_keys.add(primary_kana)
+            for k_text in kanjis: self_keys.add(k_text)
+            for r_text, _ in readings: self_keys.add(r_text)
+
+            xrefs = []
+            for x in sense.findall('xref'):
+                if x.text and x.text.strip():
+                    raw_x = x.text.strip()
+                    clean_x = re.sub(r'[\(\（].*?[\)\）]', '', raw_x)
+                    clean_x = re.sub(r'\[.*?\]', '', clean_x).strip()
+                    if clean_x not in self_keys:
+                        xrefs.append(raw_x)
 
             metadata = []
             if pos_tags:
