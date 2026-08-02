@@ -88,6 +88,24 @@ def get_stable_id(kanji, kana, romaji, occurrence=0):
     # constrain to a positive 53-bit signed integer to prevent JS precision loss
     return unsigned_val & 0x1FFFFFFFFFFFFF
 
+def normalize_cross_ref_target(text):
+    """
+    Extracts the core target word from a cross-reference or usage note string
+    for comparison against self_keys.
+    """
+    if not text:
+        return ""
+    # strip leading "zobacz również" prefixes
+    cleaned = re.sub(r'^(zobacz\s+również|zobacz\s+też|porównaj):?\s*', '', text.strip(), flags=re.IGNORECASE)
+    # remove parenthetical readings: "物寂しい(ものさびしい)" -> "物寂しい"
+    cleaned = re.sub(r'[\(\（].*?[\)\）]', '', cleaned)
+    # remove sense indices: "丸[1]" -> "丸"
+    cleaned = re.sub(r'\[.*?\]', '', cleaned)
+    # take first term before slashes, middle dots, or whitespace
+    cleaned = re.split(r'[・/\s]', cleaned)[0].strip()
+    # normalize Katakana to Hiragana and lowercase for safe comparison
+    return to_hiragana(cleaned.lower())
+
 def to_hiragana(text):
     """Converts Katakana characters to Hiragana for uniform alignment matching.
 
@@ -447,23 +465,44 @@ def build_sqlite_db(source_xml, db_path, version_string="unknown"):
             # extract cross-references (<xref>)     
             # build set of this entry's own kanji & kana to suppress self-referencing xrefs
             self_keys = set()
-            if primary_kanji: self_keys.add(primary_kanji.strip())
-            if primary_kana: self_keys.add(primary_kana.strip())
-            for k_text in kanjis: self_keys.add(k_text.strip())
-            for r_text, _ in readings: self_keys.add(r_text.strip())
+            if primary_kanji:
+                self_keys.add(primary_kanji.strip().lower())
+                self_keys.add(to_hiragana(primary_kanji.strip().lower()))
+            if primary_kana:
+                self_keys.add(primary_kana.strip().lower())
+                self_keys.add(to_hiragana(primary_kana.strip().lower()))
+            for k_text in kanjis:
+                if k_text:
+                    self_keys.add(k_text.strip().lower())
+                    self_keys.add(to_hiragana(k_text.strip().lower()))
+            for r_text, _ in readings:
+                if r_text:
+                    self_keys.add(r_text.strip().lower())
+                    self_keys.add(to_hiragana(r_text.strip().lower()))
 
+            # extract usage notes (<s_inf>), filtering out self-referencing see-also notes
+            s_infs = []
+            for s in sense.findall('s_inf'):
+                lang = s.attrib.get(xml_lang_attr) or s.attrib.get('xml:lang')
+                if (lang == 'pol' or not lang) and s.text and s.text.strip():
+                    text = s.text.strip()
+                    # check if this s_inf is a cross-reference matching any of self_keys
+                    if text.lower().startswith("zobacz"):
+                        target_key = normalize_cross_ref_target(text)
+                        if target_key in self_keys:
+                            continue  # suppress self-referencing s_inf note
+                    s_infs.append(text)
+
+            # extract cross-references (<xref>)
             xrefs = []
             for x in sense.findall('xref'):
                 if x.text and x.text.strip():
                     raw_x = x.text.strip()
-                    # remove parenthetical readings: "物寂しい(ものさびしい)" -> "物寂しい"
-                    clean_x = re.sub(r'[\(\（].*?[\)\）]', '', raw_x)
-                    # remove sense indices: "丸[1]" -> "丸"
-                    clean_x = re.sub(r'\[.*?\]', '', clean_x)
-                    # remove middle-dot kana attachments: "英文学・えいぶんがく" -> "英文学"
-                    clean_x = clean_x.split('・')[0].split('/')[0].strip()
-                    if clean_x not in self_keys:
-                        xrefs.append(raw_x)
+                    target_key = normalize_cross_ref_target(raw_x)
+                    if target_key not in self_keys:
+                        # Clean off any duplicate 'zobacz również' prefixes in raw_x if present
+                        clean_raw_x = re.sub(r'^(zobacz\s+również|zobacz\s+też|porównaj):?\s*', '', raw_x, flags=re.IGNORECASE)
+                        xrefs.append(clean_raw_x)
 
             metadata = []
             if pos_tags:
