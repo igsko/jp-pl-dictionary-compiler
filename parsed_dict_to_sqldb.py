@@ -447,17 +447,21 @@ def build_sqlite_db(source_xml, db_path, version_string="unknown"):
             # extract cross-references (<xref>)     
             # build set of this entry's own kanji & kana to suppress self-referencing xrefs
             self_keys = set()
-            if primary_kanji: self_keys.add(primary_kanji)
-            if primary_kana: self_keys.add(primary_kana)
-            for k_text in kanjis: self_keys.add(k_text)
-            for r_text, _ in readings: self_keys.add(r_text)
+            if primary_kanji: self_keys.add(primary_kanji.strip())
+            if primary_kana: self_keys.add(primary_kana.strip())
+            for k_text in kanjis: self_keys.add(k_text.strip())
+            for r_text, _ in readings: self_keys.add(r_text.strip())
 
             xrefs = []
             for x in sense.findall('xref'):
                 if x.text and x.text.strip():
                     raw_x = x.text.strip()
+                    # remove parenthetical readings: "物寂しい(ものさびしい)" -> "物寂しい"
                     clean_x = re.sub(r'[\(\（].*?[\)\）]', '', raw_x)
-                    clean_x = re.sub(r'\[.*?\]', '', clean_x).strip()
+                    # remove sense indices: "丸[1]" -> "丸"
+                    clean_x = re.sub(r'\[.*?\]', '', clean_x)
+                    # remove middle-dot kana attachments: "英文学・えいぶんがく" -> "英文学"
+                    clean_x = clean_x.split('・')[0].split('/')[0].strip()
                     if clean_x not in self_keys:
                         xrefs.append(raw_x)
 
